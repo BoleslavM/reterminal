@@ -1,0 +1,322 @@
+# =============================================================================
+# reTerminal E1002 – quatre interfaces pilotées par Home Assistant
+#   Moments / Météo / Assistant / Cadre  (input_select.ecran_mode)
+# Bouton vert        : interface suivante (automatisation Home Assistant)
+# Bouton blanc droit : infos du cadre photo +1 (automatisation Home Assistant)
+# Bouton blanc gauche: rafraîchir l'écran tout de suite
+# Les dessins sont dans ecran_dessins.h et ecran_ecrans.h (même dossier).
+# =============================================================================
+
+substitutions:
+  # Adresse de Home Assistant sur le réseau local (Immich écoute sur le port 2283)
+  ha_ip: "192.168.1.118"
+  # Clé API Immich (Immich > Paramètres du compte > Clés API). À remplacer.
+  immich_cle: "A_REMPLACER"
+
+esphome:
+  name: reterminal-e1002
+  friendly_name: reTerminal E1002
+  includes:
+    - ecran_dessins.h
+    - ecran_ecrans.h
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 32MB
+  framework:
+    type: esp-idf
+    advanced:
+      enable_idf_experimental_features: true
+
+psram:
+  mode: octal
+
+logger:
+
+api:
+  encryption:
+    key: !secret reterminal_api_key
+  on_client_connected:
+    - script.execute: redessiner
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+http_request:
+  verify_ssl: false
+  timeout: 20s
+
+globals:
+  - id: photo_ok
+    type: bool
+    initial_value: "false"
+
+# -----------------------------------------------------------------------------
+# Rafraîchissement : à chaque changement important (mode, moment, météo,
+# alerte) + toutes les 15 minutes. L'attente laisse arriver toutes les valeurs.
+# -----------------------------------------------------------------------------
+script:
+  - id: redessiner
+    mode: restart
+    then:
+      - delay: 8s
+      - component.update: epaper_display
+
+interval:
+  - interval: 15min
+    then:
+      - script.execute: redessiner
+
+# Communication avec l'écran E-Ink
+spi:
+  clk_pin: GPIO7
+  mosi_pin: GPIO9
+
+# -----------------------------------------------------------------------------
+# Photo du jour depuis Immich (l'adresse est fixée par Home Assistant)
+# -----------------------------------------------------------------------------
+online_image:
+  - id: photo
+    url: "http://${ha_ip}:2283/api/server/ping"
+    format: JPEG
+    type: RGB565
+    resize: 800x600
+    buffer_size: 65536
+    update_interval: never
+    request_headers:
+      x-api-key: "${immich_cle}"
+    on_download_finished:
+      - globals.set:
+          id: photo_ok
+          value: "true"
+      - script.execute: redessiner
+    on_error:
+      - globals.set:
+          id: photo_ok
+          value: "false"
+
+# -----------------------------------------------------------------------------
+# Polices
+# -----------------------------------------------------------------------------
+font:
+  - file: "gfonts://DM Serif Display"
+    id: f_titre
+    size: 46
+    glyphsets: [GF_Latin_Core]
+  - file: "gfonts://DM Serif Display"
+    id: f_sous_titre
+    size: 38
+    glyphsets: [GF_Latin_Core]
+  - file: "gfonts://DM Serif Display"
+    id: f_alerte
+    size: 60
+    glyphsets: [GF_Latin_Core]
+  - file: "gfonts://Inter@700"
+    id: f_chiffres
+    size: 96
+    glyphs: "0123456789-–,° "
+  - file: "gfonts://Inter@500"
+    id: f_corps
+    size: 24
+    glyphsets: [GF_Latin_Core]
+  - file: "gfonts://Inter@500"
+    id: f_petit
+    size: 19
+    glyphsets: [GF_Latin_Core]
+  - file: "gfonts://Inter@700"
+    id: f_gras
+    size: 26
+    glyphsets: [GF_Latin_Core]
+  # Icônes Material Design
+  - file: &mdi
+      type: web
+      url: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
+    id: i_grande
+    size: 120
+    glyphs: &icones
+      - "\U000F0599"  # soleil
+      - "\U000F0594"  # nuit
+      - "\U000F0595"  # éclaircies
+      - "\U000F0590"  # nuageux
+      - "\U000F0591"  # brouillard
+      - "\U000F0596"  # averses
+      - "\U000F0597"  # pluie
+      - "\U000F0598"  # neige
+      - "\U000F0593"  # orage
+      - "\U000F0A79"  # poubelle
+      - "\U000F11DB"  # fenêtre fermée
+      - "\U000F11DC"  # fenêtre ouverte
+      - "\U000F024A"  # fleur
+      - "\U000F0241"  # éclair (Tempo)
+      - "\U000F0335"  # ampoule
+      - "\U000F0F54"  # maison thermomètre
+      - "\U000F05E1"  # tout va bien
+  - file: *mdi
+    id: i_moyenne
+    size: 64
+    glyphs: *icones
+  - file: *mdi
+    id: i_petite
+    size: 32
+    glyphs: *icones
+
+# -----------------------------------------------------------------------------
+# Données lues dans Home Assistant
+# -----------------------------------------------------------------------------
+text_sensor:
+  - { platform: homeassistant, id: t_signature, entity_id: sensor.ecran_signature,
+      on_value: [ script.execute: redessiner ] }
+  - { platform: homeassistant, id: t_mode, entity_id: input_select.ecran_mode }
+  - { platform: homeassistant, id: t_moment, entity_id: sensor.ecran_moment }
+  - { platform: homeassistant, id: t_scene, entity_id: sensor.ecran_scene_meteo }
+  - { platform: homeassistant, id: t_date, entity_id: sensor.ecran_date }
+  - { platform: homeassistant, id: t_meteo, entity_id: sensor.ecran_meteo_texte }
+  - { platform: homeassistant, id: t_prev, entity_id: sensor.ecran_previsions }
+  - { platform: homeassistant, id: t_dem_cond, entity_id: sensor.ecran_previsions, attribute: demain_condition }
+  - { platform: homeassistant, id: t_alerte, entity_id: sensor.ecran_alerte }
+  - { platform: homeassistant, id: t_alerte_titre, entity_id: sensor.ecran_alerte, attribute: titre }
+  - { platform: homeassistant, id: t_alerte_detail, entity_id: sensor.ecran_alerte, attribute: detail }
+  - { platform: homeassistant, id: t_ag1, entity_id: sensor.ecran_agenda, attribute: l1 }
+  - { platform: homeassistant, id: t_ag2, entity_id: sensor.ecran_agenda, attribute: l2 }
+  - { platform: homeassistant, id: t_ag3, entity_id: sensor.ecran_agenda, attribute: l3 }
+  - { platform: homeassistant, id: t_ag4, entity_id: sensor.ecran_agenda, attribute: l4 }
+  - { platform: homeassistant, id: t_tempo_j, entity_id: sensor.rte_tempo_couleur_actuelle }
+  - { platform: homeassistant, id: t_tempo_d, entity_id: sensor.rte_tempo_prochaine_couleur }
+  # Identifiant de la photo Immich choisie par Home Assistant
+  - platform: homeassistant
+    id: t_photo
+    entity_id: sensor.ecran_photo_immich
+    on_value:
+      - if:
+          condition:
+            lambda: 'return x.size() > 20 && x != "unknown" && x != "unavailable";'
+          then:
+            - online_image.set_url:
+                id: photo
+                url: !lambda 'return "http://${ha_ip}:2283/api/assets/" + x + "/thumbnail?size=preview";'
+            - component.update: photo
+
+sensor:
+  - { platform: homeassistant, id: s_temp_ext, entity_id: sensor.ecran_meteo_texte, attribute: temperature }
+  - { platform: homeassistant, id: s_tmin, entity_id: sensor.ecran_previsions, attribute: tmin }
+  - { platform: homeassistant, id: s_tmax, entity_id: sensor.ecran_previsions, attribute: tmax }
+  - { platform: homeassistant, id: s_dtmin, entity_id: sensor.ecran_previsions, attribute: demain_tmin }
+  - { platform: homeassistant, id: s_dtmax, entity_id: sensor.ecran_previsions, attribute: demain_tmax }
+  - { platform: homeassistant, id: s_conso, entity_id: sensor.linky_conso_hier }
+  - { platform: homeassistant, id: s_cout, entity_id: sensor.linky_cout_journalier }
+  - { platform: homeassistant, id: s_tarif, entity_id: sensor.linky_tarif_actuel }
+  - { platform: homeassistant, id: s_lumieres, entity_id: sensor.ecran_maison }
+  - { platform: homeassistant, id: s_fenetres, entity_id: sensor.ecran_maison, attribute: fenetres }
+  - { platform: homeassistant, id: s_niveau, entity_id: input_number.ecran_cadre_niveau }
+  # Pièces : chambre, cuisine, salle à manger, salle de bain, bureau, couloir
+  - { platform: homeassistant, id: s_p0, entity_id: sensor.0xa4c138ca65ad0221_temperature }
+  - { platform: homeassistant, id: s_p1, entity_id: sensor.0xa4c13875f7e6443d_temperature }
+  - { platform: homeassistant, id: s_p2, entity_id: sensor.chauffage_salle_a_manger_local_temperature }
+  - { platform: homeassistant, id: s_p3, entity_id: sensor.thermo_salle_de_baing_local_temperature }
+  - { platform: homeassistant, id: s_p4, entity_id: sensor.thermo_bureau_local_temperature }
+  - { platform: homeassistant, id: s_p5, entity_id: sensor.thermo_couloir_local_temperature }
+
+# -----------------------------------------------------------------------------
+# Écran E1002
+# -----------------------------------------------------------------------------
+display:
+  - platform: epaper_spi
+    id: epaper_display
+    model: Seeed-reTerminal-E1002
+    update_interval: never
+    lambda: |-
+      auto S = [](text_sensor::TextSensor *t) -> std::string {
+        if (!t->has_state()) return "";
+        std::string s = t->state;
+        return (s == "unknown" || s == "unavailable") ? std::string("") : s;
+      };
+      ecran::Donnees v;
+      v.mode = S(id(t_mode));
+      v.moment = S(id(t_moment));
+      v.scene = S(id(t_scene));
+      if (v.scene.empty()) v.scene = "soleil";
+      v.date = S(id(t_date));
+      v.meteo = S(id(t_meteo));
+      v.prev_cond = S(id(t_prev));
+      v.dem_cond = S(id(t_dem_cond));
+      v.alerte = S(id(t_alerte));
+      if (v.alerte.empty()) v.alerte = "aucune";
+      v.alerte_titre = S(id(t_alerte_titre));
+      v.alerte_detail = S(id(t_alerte_detail));
+      v.agenda[0] = S(id(t_ag1));
+      v.agenda[1] = S(id(t_ag2));
+      v.agenda[2] = S(id(t_ag3));
+      v.agenda[3] = S(id(t_ag4));
+      v.tempo_j = S(id(t_tempo_j));
+      v.tempo_d = S(id(t_tempo_d));
+      v.temp_ext = id(s_temp_ext).state;
+      v.tmin = id(s_tmin).state;
+      v.tmax = id(s_tmax).state;
+      v.dtmin = id(s_dtmin).state;
+      v.dtmax = id(s_dtmax).state;
+      v.conso = id(s_conso).state;
+      v.cout = id(s_cout).state;
+      v.tarif = id(s_tarif).state;
+      v.lumieres = std::isnan(id(s_lumieres).state) ? 0 : (int) id(s_lumieres).state;
+      v.fenetres = std::isnan(id(s_fenetres).state) ? 0 : (int) id(s_fenetres).state;
+      v.niveau = std::isnan(id(s_niveau).state) ? 0 : (int) id(s_niveau).state;
+      v.t_pieces[0] = id(s_p0).state;
+      v.t_pieces[1] = id(s_p1).state;
+      v.t_pieces[2] = id(s_p2).state;
+      v.t_pieces[3] = id(s_p3).state;
+      v.t_pieces[4] = id(s_p4).state;
+      v.t_pieces[5] = id(s_p5).state;
+      v.photo_ok = id(photo_ok);
+
+      // Adaptateur entre les dessins et l'écran ESPHome
+      struct Ecran {
+        display::Display &it;
+        display::BaseFont *polices[10];
+        image::Image *ph;
+        void draw_pixel_at(int x, int y, Color c) { it.draw_pixel_at(x, y, c); }
+        void texte(int x, int y, int p, Color c, int a, const std::string &s) {
+          if (s.empty()) return;
+          auto al = a == 0 ? display::TextAlign::TOP_LEFT
+                  : (a == 1 ? display::TextAlign::TOP_CENTER : display::TextAlign::TOP_RIGHT);
+          it.print(x, y, polices[p], c, al, s.c_str());
+        }
+        void photo() {
+          it.fill(Color(0, 0, 0));
+          it.image(400, 240, ph, display::ImageAlign::CENTER);
+        }
+      };
+      // Ordre = enum ecran::Police
+      Ecran e{it, {id(f_titre), id(f_sous_titre), id(f_chiffres), id(f_corps), id(f_petit),
+                   id(f_gras), id(i_grande), id(i_moyenne), id(i_petite), id(f_alerte)}, id(photo)};
+      ecran::dessiner(e, v);
+
+# -----------------------------------------------------------------------------
+# Boutons physiques (les noms gardent les entités existantes)
+# -----------------------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    name: "Bouton vert"
+    pin:
+      number: GPIO3
+      mode: INPUT_PULLUP
+      inverted: true
+
+  - platform: gpio
+    name: "Bouton blanc droit"
+    pin:
+      number: GPIO4
+      mode: INPUT_PULLUP
+      inverted: true
+
+  - platform: gpio
+    name: "Bouton blanc gauche"
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+      inverted: true
+    on_press:
+      - component.update: epaper_display
